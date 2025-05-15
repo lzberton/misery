@@ -6,6 +6,8 @@ from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import os
 load_dotenv()
 USER = os.getenv("USER")
@@ -187,15 +189,26 @@ df["EXISTE_PREVISAO"] = df["DATA_PREVISTA_SAIDA"].apply(
 df["EXISTE_SAIDA"] = df["DATA_EFETIVA_SAIDA"].apply(
     lambda x: "EXISTE SAÍDA" if pd.notnull(x) else "SEM SAÍDA"
 )
-now_adjusted = datetime.now()
+now_adjusted = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
     # Filtros
+def ajustar_timezone(dt):
+    """Garante que o datetime tenha o timezone de Brasília"""
+    if pd.notnull(dt) and dt.tzinfo is None:
+        return dt.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+    return dt
+
 def calcular_tempo_saida(row):
+    # Ajusta os datetimes para timezone de Brasília
+    data_prevista = ajustar_timezone(row["DATA_PREVISTA_SAIDA"])
+    data_efetiva = ajustar_timezone(row["DATA_EFETIVA_SAIDA"])
+
     if row["EXISTE_SAIDA"] == "EXISTE SAÍDA":
-        referencia = row["DATA_PREVISTA_SAIDA"] if pd.notnull(row["DATA_PREVISTA_SAIDA"]) else row["DATA_EFETIVA_SAIDA"]
-        if pd.notnull(referencia) and pd.notnull(row["DATA_EFETIVA_SAIDA"]):
-            return int((referencia - row["DATA_EFETIVA_SAIDA"]).total_seconds())
-    elif pd.notnull(row["DATA_PREVISTA_SAIDA"]):
-        return int((row["DATA_PREVISTA_SAIDA"] - now_adjusted).total_seconds()) 
+        referencia = data_prevista if pd.notnull(data_prevista) else data_efetiva
+        if pd.notnull(referencia) and pd.notnull(data_efetiva):
+            return int((referencia - data_efetiva).total_seconds())
+    elif pd.notnull(data_prevista):
+        return int((data_prevista - now_adjusted).total_seconds()) 
     return None
 
 df["TEMPO_ATE_SAIDA"] = df.apply(calcular_tempo_saida, axis=1)
