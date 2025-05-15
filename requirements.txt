@@ -5,4 +5,4 @@ pandas
 numpy
 sqlalchemy
 dotenv
-zoneinfo
+pytz

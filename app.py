@@ -6,7 +6,7 @@ from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
-from zoneinfo import ZoneInfo
+import pytz
 import os
 load_dotenv()
 USER = os.getenv("USER")
@@ -188,13 +188,13 @@ df["EXISTE_PREVISAO"] = df["DATA_PREVISTA_SAIDA"].apply(
 df["EXISTE_SAIDA"] = df["DATA_EFETIVA_SAIDA"].apply(
     lambda x: "EXISTE SAÍDA" if pd.notnull(x) else "SEM SAÍDA"
 )
-now_adjusted = datetime.now(ZoneInfo("America/Sao_Paulo"))
+timezone = pytz.timezone("America/Sao_Paulo")
+now_adjusted = datetime.now(timezone)
 
-    # Filtros
 def ajustar_timezone(dt):
-    """Garante que o datetime tenha o timezone de Brasília"""
+    """Garante que o datetime tenha o timezone de Brasília usando pytz"""
     if pd.notnull(dt) and dt.tzinfo is None:
-        return dt.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+        return timezone.localize(dt)
     return dt
 
 def calcular_tempo_saida(row):
