@@ -419,4 +419,4 @@ scroll_style = """
 # Renderiza com scroll e estilo
 st.markdown(scroll_style, unsafe_allow_html=True)
 st.markdown(f"<div class='tabela-custom'>{html}</div>", unsafe_allow_html=True)
-st_autorefresh(interval=450000, key="refresh")
+st_autorefresh(interval=450000, key="auto-refresh")
