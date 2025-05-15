@@ -8,12 +8,12 @@ from sqlalchemy import create_engine
 from dotenv import load_dotenv
 import os
 load_dotenv()
-db_user = os.getenv("USER")
-db_password = os.getenv("PASSWORD")
+USER = os.getenv("USER")
+PASSWORD = os.getenv("PASSWORD")
 
 @st.cache_resource
 def conectar_postgres():
-    url = f"postgresql+psycopg2://{db_user}:{db_password}@database.datalake.kmm.app.br:5430/datalake"
+    url = f"postgresql+psycopg2://{USER}:{PASSWORD}@database.datalake.kmm.app.br:5430/datalake"
     engine = create_engine(url)
     return engine
 
