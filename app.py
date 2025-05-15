@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import psycopg2
 import numpy as np
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
