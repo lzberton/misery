@@ -1,18 +1,9 @@
-# Ignorar o arquivo de ambiente com dados sensíveis
 .env
-
-# Ignorar arquivos Python compilados
 __pycache__/
 *.py[cod]
-
-# Ignorar logs, temporários e caches
 *.log
 *.tmp
 *.bak
-
-# Ignorar pastas de cache do Streamlit (se usar)
 .streamlit/
-
-# Ignorar arquivos ocultos do sistema
 .DS_Store
 Thumbs.db
