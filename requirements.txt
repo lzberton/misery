@@ -3,3 +3,5 @@ streamlit_autorefresh
 psycopg2-binary
 pandas
 numpy
+sqlalchemy
+dotenv
