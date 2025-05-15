@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
 import numpy as np
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
@@ -151,6 +150,8 @@ st.markdown("""
         }
     </style>
 """, unsafe_allow_html=True)
+timezone = pytz.timezone("America/Sao_Paulo")
+now_adjusted = datetime.now(timezone)
 def barra_superior():
     st.markdown(f"""
     <div style='
@@ -174,7 +175,7 @@ def barra_superior():
             <h2 style='margin: 0;'>MONITORAMENTO DE SAÍDA DE PÁTIO</h2>
         </div>
         <div style='flex: 1; text-align: right;'>
-            <strong>ÚLTIMA ATUALIZAÇÃO:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
+            <strong>ÚLTIMA ATUALIZAÇÃO:</strong> {now_adjusted.strftime('%d/%m/%Y %H:%M:%S')}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -188,8 +189,7 @@ df["EXISTE_PREVISAO"] = df["DATA_PREVISTA_SAIDA"].apply(
 df["EXISTE_SAIDA"] = df["DATA_EFETIVA_SAIDA"].apply(
     lambda x: "EXISTE SAÍDA" if pd.notnull(x) else "SEM SAÍDA"
 )
-timezone = pytz.timezone("America/Sao_Paulo")
-now_adjusted = datetime.now(timezone)
+
 
 def ajustar_timezone(dt):
     """Garante que o datetime tenha o timezone de Brasília usando pytz"""
