@@ -6,7 +6,6 @@ from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
-from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
 load_dotenv()

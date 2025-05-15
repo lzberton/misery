@@ -5,5 +5,4 @@ pandas
 numpy
 sqlalchemy
 dotenv
-datetime
 zoneinfo
