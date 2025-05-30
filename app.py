@@ -325,8 +325,9 @@ def estilo_personalizado(df):
     styled = styled.hide(axis="index")
     return styled
 
-
+df_exibir["PREVISÃO SAÍDA"] = pd.to_datetime(df_exibir["PREVISÃO SAÍDA"], format="%d/%m/%y %H:%M")
 df_exibir = df_exibir.sort_values(by="PREVISÃO SAÍDA")
+df_exibir["PREVISÃO SAÍDA"] = df_exibir["PREVISÃO SAÍDA"].dt.strftime("%d/%m/%Y %H:%M")
 styled_df = estilo_personalizado(df_exibir.fillna(""))
 html = styled_df.to_html(index=False, escape=False)
 scroll_style = """
