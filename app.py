@@ -51,7 +51,9 @@ st.markdown(
         header, footer {
             visibility: hidden;
         }
-
+        .main{
+        background-color:white;
+        }
         .main > div:first-child {
             padding-top: 0rem;
         }
@@ -91,9 +93,9 @@ def top_bar():
             transform: translateX(-50%);
             text-align: center;
         '>
-            <h2 style='margin: 0;'>MONITORAMENTO DE SAÍDA DE PÁTIO</h2>
+            <h2 style='margin: 0; color:black'>MONITORAMENTO DE SAÍDA DE PÁTIO</h2>
         </div>
-        <div style='flex: 1; text-align: right;'>
+        <div style='flex: 1; text-align: right; color:#434343'>
             <strong>ÚLTIMA ATUALIZAÇÃO:</strong> {now_adjusted.strftime('%d/%m/%Y %H:%M:%S')}
         </div>
     </div>
@@ -273,6 +275,7 @@ st.markdown(
         padding:10px;
         border-radius:10px;
         text-align: center;
+        color: #434343;
     '>
         <h4>Total de Saída Previstas: {qtd_placas}</h4>
     </div>
@@ -303,6 +306,7 @@ def estilo_personalizado(df):
                 "text-align": "center",
                 "vertical-align": "middle",
                 "font-weight": "bold",
+                "color":"#434343",
             },
         )
 
