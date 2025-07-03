@@ -51,9 +51,6 @@ st.markdown(
         header, footer {
             visibility: hidden;
         }
-        .main{
-        background-color:white;
-        }
         .main > div:first-child {
             padding-top: 0rem;
         }
@@ -64,10 +61,18 @@ st.markdown(
             padding-left: 1rem;
             padding-right: 1rem;
         }
+        .stApp {
+            background-color: white;
+        }
+        .block-container {
+            background-color: white;
+        }
+
     </style>
 """,
     unsafe_allow_html=True,
 )
+
 timezone = pytz.timezone("America/Sao_Paulo")
 now_adjusted = datetime.now(timezone)
 
@@ -244,8 +249,6 @@ nomes_alterados = {
     "PRIORIDADE": "PRIORIDADE",
     "REFERENCIA": "REFERÊNCIA ATUAL",
 }
-
-
 def apply_priority_style(df):
     def line_color(row):
         cor = "white"
@@ -355,6 +358,7 @@ scroll_style = """
     padding: 8px;
     border: 1px solid #ddd;
     font-weight: bold;
+    color: #434343;
 }
 </style>
 """
