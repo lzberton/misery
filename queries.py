@@ -30,7 +30,7 @@ main_query = """
          AND completo."DATA_EFETIVA_ENTRADA" BETWEEN vc."DATA_HORA_ENGATE" AND COALESCE(vc."DATA_HORA_DESENGATE", NOW());
     """
 ref_query = """
-        SELECT DISTINCT rf."PLACA_CONTROLE", rf."REFERENCIA"
+        SELECT DISTINCT rf."PLACA_CONTROLE", rf."REFERENCIA", rf."NOME_MOTORISTA" as "MOTORISTA"
         FROM oper.rank_frota rf
         WHERE rf."DIA" IS NOT NULL;
     """

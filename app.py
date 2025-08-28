@@ -218,6 +218,7 @@ def classificar_rumo(row):
 
 df["RUMO"] = df.apply(classificar_rumo, axis=1)
 df["REFERENCIA"] = df["REFERENCIA"].str.upper()
+df["MOTORISTA"] = df["MOTORISTA"].str.upper()
 df_filtrado = df[
     (df["EXISTE_SAIDA"] == "SEM SAÍDA")
     & (df["SITUACAO_ID"].isin([2, 3]))
@@ -234,6 +235,7 @@ colunas_exibir = [
     "DATA_EFETIVA_SAIDA",
     "TEMPO_FORMATADO",
     "PRIORIDADE",
+    "MOTORISTA",
     "REFERENCIA",
 ]
 nomes_alterados = {
@@ -247,6 +249,7 @@ nomes_alterados = {
     "DATA_EFETIVA_SAIDA": "SAÍDA",
     "TEMPO_FORMATADO": "TEMPO ATÉ SAÍDA",
     "PRIORIDADE": "PRIORIDADE",
+    "MOTORISTA":"MOTORISTA",
     "REFERENCIA": "REFERÊNCIA ATUAL",
 }
 def apply_priority_style(df):
