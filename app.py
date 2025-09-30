@@ -15,20 +15,16 @@ USER = os.getenv("USER")
 PASSWORD = os.getenv("PASSWORD")
 
 
-@st.cache_resource
-def connect_db():
-    url = f"postgresql+psycopg2://{USER}:{PASSWORD}@database.datalake.kmm.app.br:5430/datalake"
-    engine = create_engine(url)
-    return engine
-
-
 @st.cache_data(ttl=300)
 def load_data():
-    engine = connect_db()
+    url = f"postgresql+psycopg2://{USER}:{PASSWORD}@database.datalake.kmm.app.br:5430/datalake"
+    engine = create_engine(url)
 
-    df_main = pd.read_sql(main_query, engine)
-    df_ref = pd.read_sql(ref_query, engine)
-    df_shipping = pd.read_sql(shipping_query, engine)
+    with engine.connect() as conn:
+        df_main = pd.read_sql(main_query, conn)
+        df_ref = pd.read_sql(ref_query, conn)
+        df_shipping = pd.read_sql(shipping_query, conn)
+
     df_merge = pd.merge(
         df_main, df_ref, how="left", left_on="PLACA", right_on="PLACA_CONTROLE"
     )
@@ -42,6 +38,7 @@ def load_data():
     )
 
     return df_final
+
 
 
 st.set_page_config(page_title="Monitoramento Pátio", layout="wide")
