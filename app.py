@@ -1,29 +1,50 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 from queries import main_query, ref_query, shipping_query
 import pytz
 import os
+import json
+from pathlib import Path
 
+# =========================
+# Environment / Config
+# =========================
 load_dotenv()
 USER = os.getenv("USER")
 PASSWORD = os.getenv("PASSWORD")
 
+timezone = pytz.timezone("America/Sao_Paulo")
+
+# Persistent cache file (same folder as app.py)
+CACHE_FILE = Path(__file__).with_name("controle_patio_cache.json")
+
+# Refresh cadence (15 minutes)
+REFRESH_EVERY = timedelta(minutes=15)
+
+# Streamlit autorefresh interval (ms)
+AUTOREFRESH_INTERVAL_MS = 900000  # 15 min
+
+
+# =========================
+# DB Engine (reusable)
+# =========================
 @st.cache_resource
 def get_engine():
     url = f"postgresql+psycopg2://{USER}:{PASSWORD}@database.datalake.kmm.app.br:5430/datalake"
     return create_engine(url, pool_pre_ping=True)
 
-@st.cache_data(ttl=300)
-def load_data():
-    url = f"postgresql+psycopg2://{USER}:{PASSWORD}@database.datalake.kmm.app.br:5430/datalake"
-    engine = create_engine(url)
 
+# =========================
+# DB Loaders
+# =========================
+@st.cache_data(ttl=900)
+def load_data():
+    engine = get_engine()
     with engine.connect() as conn:
         df_main = pd.read_sql(main_query, conn)
         df_ref = pd.read_sql(ref_query, conn)
@@ -43,7 +64,8 @@ def load_data():
 
     return df_final
 
-@st.cache_data(ttl=300)
+
+@st.cache_data(ttl=900)
 def get_last_update():
     sql_last_update = """
     SELECT MAX(cp."DATE_UPDATE") AS last_update
@@ -51,53 +73,236 @@ def get_last_update():
     """
     engine = get_engine()
     with engine.connect() as conn:
-        last_update = conn.execute(text(sql_last_update)).scalar()
+        return conn.execute(text(sql_last_update)).scalar()
 
-    return last_update
 
-st.set_page_config(page_title="Monitoramento Pátio", layout="wide")
-st.markdown(
-    """
-    <style>
-        header, footer {
-            visibility: hidden;
+# =========================
+# Persistent Disk Cache (JSON)
+# =========================
+def read_persistent_cache():
+    if not CACHE_FILE.exists():
+        return None
+
+    try:
+        payload = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+
+        rows = payload.get("rows", [])
+        df_cached = pd.DataFrame(rows)
+
+        last_update_iso = payload.get("last_update")
+        last_update = pd.to_datetime(last_update_iso) if last_update_iso else None
+
+        saved_at_iso = payload.get("saved_at")
+        saved_at = pd.to_datetime(saved_at_iso) if saved_at_iso else None
+
+        qtd_placas = payload.get("qtd_placas", 0)
+
+        return {
+            "df": df_cached,
+            "last_update": last_update,
+            "saved_at": saved_at,
+            "qtd_placas": qtd_placas,
         }
-        .main > div:first-child {
-            padding-top: 0rem;
-        }
-
-        .block-container {
-            padding-top: 0rem;
-            padding-bottom: 0rem;
-            padding-left: 1rem;
-            padding-right: 1rem;
-        }
-        .stApp {
-            background-color: white;
-        }
-        .block-container {
-            background-color: white;
-        }
-
-    </style>
-""",
-    unsafe_allow_html=True,
-)
+    except Exception:
+        return None
 
 
+def write_persistent_cache(df_exibir, last_update, qtd_placas):
+    now_sp = datetime.now(timezone)
 
-timezone = pytz.timezone("America/Sao_Paulo")
-now_adjusted = datetime.now(timezone)
+    # Ensure serializable
+    last_update_dt = None
+    if last_update is not None:
+        # pandas Timestamp -> python datetime
+        if hasattr(last_update, "to_pydatetime"):
+            last_update_dt = last_update.to_pydatetime()
+        else:
+            last_update_dt = last_update
+
+    payload = {
+        "saved_at": now_sp.isoformat(),
+        "last_update": last_update_dt.isoformat() if last_update_dt is not None else None,
+        "qtd_placas": int(qtd_placas),
+        "rows": df_exibir.to_dict(orient="records"),
+    }
+
+    CACHE_FILE.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+def build_view_from_raw(df_raw: pd.DataFrame):
+    now_adjusted = datetime.now(timezone)
+
+    df = df_raw.copy()
+
+    # Dates
+    df["DATA_PREVISTA_SAIDA"] = pd.to_datetime(df["DATA_PREVISTA_SAIDA"], errors="coerce")
+    df["DATA_EFETIVA_SAIDA"] = pd.to_datetime(df["DATA_EFETIVA_SAIDA"], errors="coerce")
+
+    df["EXISTE_PREVISAO"] = df["DATA_PREVISTA_SAIDA"].apply(
+        lambda x: "COM PREVISÃO" if pd.notnull(x) else "SEM PREVISÃO"
+    )
+    df["EXISTE_SAIDA"] = df["DATA_EFETIVA_SAIDA"].apply(
+        lambda x: "EXISTE SAÍDA" if pd.notnull(x) else "SEM SAÍDA"
+    )
+
+    def timezone_adjust(dt):
+        if pd.notnull(dt) and getattr(dt, "tzinfo", None) is None:
+            return timezone.localize(dt)
+        return dt
+
+    def calc_tempo_saida(row):
+        data_prevista = timezone_adjust(row["DATA_PREVISTA_SAIDA"])
+        data_efetiva = timezone_adjust(row["DATA_EFETIVA_SAIDA"])
+
+        if row["EXISTE_SAIDA"] == "EXISTE SAÍDA":
+            referencia = data_prevista if pd.notnull(data_prevista) else data_efetiva
+            if pd.notnull(referencia) and pd.notnull(data_efetiva):
+                return int((referencia - data_efetiva).total_seconds())
+        elif pd.notnull(data_prevista):
+            return int((data_prevista - now_adjusted).total_seconds())
+        return None
+
+    df["TEMPO_ATE_SAIDA"] = df.apply(calc_tempo_saida, axis=1)
+
+    def definir_prioridade(row):
+        if pd.isnull(row["DATA_PREVISTA_SAIDA"]):
+            return "BAIXA"
+        tempo = row["TEMPO_ATE_SAIDA"]
+        if tempo is None:
+            return "BAIXA"
+        elif tempo > 7200:
+            return "NORMAL"
+        elif 1800 < tempo <= 7200:
+            return "ATENÇÃO"
+        elif 0 < tempo <= 1800:
+            return "URGÊNCIA"
+        elif tempo < 0:
+            return "CRÍTICA"
+        return "BAIXA"
+
+    df["PRIORIDADE"] = df.apply(definir_prioridade, axis=1)
+
+    def format_time(row):
+        T = row["TEMPO_ATE_SAIDA"]
+        if pd.isnull(T) or T is None:
+            return ""
+        T = int(T)
+        sinal = "-" if T < 0 else ""
+        T = abs(T)
+        horas = T // 3600
+        minutos = (T % 3600) // 60
+
+        if horas > 0 and minutos > 0:
+            return f"{sinal}{horas}h {minutos}min"
+        elif horas > 0:
+            return f"{sinal}{horas}h"
+        elif minutos > 0:
+            return f"{sinal}{minutos}min"
+        else:
+            return f"{sinal}0min"
+
+    df["TEMPO_FORMATADO"] = df.apply(format_time, axis=1)
+
+    def classificar_rumo(row):
+        origem = row.get("PAIS_ORIGEM_SHIPPING")
+        destino = row.get("PAIS_DESTINO_SHIPPING")
+
+        if pd.isnull(origem) or pd.isnull(destino):
+            return None
+        if origem == destino:
+            return "NAC"
+        elif destino == "Brasil":
+            return "RN"
+        else:
+            return "RS"
+
+    df["RUMO"] = df.apply(classificar_rumo, axis=1)
+
+    # Reference uppercase
+    if "REFERENCIA" in df.columns:
+        df["REFERENCIA"] = df["REFERENCIA"].astype("string").str.upper()
+
+    # Motorista -> first name uppercase
+    if "MOTORISTA" in df.columns:
+        s = df["MOTORISTA"]
+        df["MOTORISTA"] = (
+            s.where(s.notna())
+            .astype("string")
+            .str.strip()
+            .str.upper()
+            .str.split()
+            .str[0]
+        )
+
+    # Filter
+    df_filtrado = df[
+        (df["EXISTE_SAIDA"] == "SEM SAÍDA")
+        & (df["SITUACAO_ID"].isin([2, 3]))
+        & (df["DATA_PREVISTA_SAIDA"].notna())
+    ]
+
+    colunas_exibir = [
+        "PLACA",
+        "PLACA_2",
+        "PLACA_3",
+        "NEGOCIADOR",
+        "RUMO",
+        "DATA_EFETIVA_ENTRADA",
+        "DATA_PREVISTA_SAIDA",
+        "TEMPO_FORMATADO",
+        "PRIORIDADE",
+        "MOTORISTA",
+        "REFERENCIA",
+    ]
+
+    nomes_alterados = {
+        "PLACA": "CAVALO",
+        "PLACA_2": "CARRETA",
+        "PLACA_3": "2ª CARRETA",
+        "NEGOCIADOR": "NEGOCIADOR",
+        "RUMO": "RUMO",
+        "DATA_EFETIVA_ENTRADA": "ENTRADA",
+        "DATA_PREVISTA_SAIDA": "PREVISÃO SAÍDA",
+        "TEMPO_FORMATADO": "TEMPO ATÉ SAÍDA",
+        "PRIORIDADE": "PRIORIDADE",
+        "MOTORISTA": "MOTORISTA",
+        "REFERENCIA": "REFERÊNCIA ATUAL",
+    }
+
+    df_exibir = df_filtrado[colunas_exibir].rename(columns=nomes_alterados).copy()
+
+    # Format dates for display
+    df_exibir["ENTRADA"] = pd.to_datetime(df_exibir["ENTRADA"], errors="coerce").dt.strftime(
+        "%d/%m/%y %H:%M"
+    )
+    df_exibir["PREVISÃO SAÍDA"] = pd.to_datetime(
+        df_exibir["PREVISÃO SAÍDA"], errors="coerce"
+    ).dt.strftime("%d/%m/%y %H:%M")
+
+    # Sort by PREVISÃO SAÍDA safely
+    sort_key = pd.to_datetime(df_exibir["PREVISÃO SAÍDA"], format="%d/%m/%y %H:%M", errors="coerce")
+    df_exibir["_sort"] = sort_key
+    df_exibir = df_exibir.sort_values("_sort").drop(columns="_sort")
+
+    df_exibir = df_exibir.fillna("").replace("None", "")
+
+    qtd_placas = df_filtrado["PLACA"].nunique()
+
+    return df_exibir, qtd_placas
+
 
 def top_bar(last_update):
-    # fallback se vier None
-    last_update_str = "-" if last_update is None else last_update.strftime("%d/%m/%Y %H:%M:%S")
+    # last_update can be None / Timestamp / datetime
+    if last_update is None or (isinstance(last_update, float) and np.isnan(last_update)):
+        last_update_str = "-"
+    else:
+        if hasattr(last_update, "to_pydatetime"):
+            last_update = last_update.to_pydatetime()
+        last_update_str = last_update.strftime("%d/%m/%Y %H:%M:%S")
 
     st.markdown(
         f"""
     <div style='
         background-color: #f0f2f6;
-        padding: 8px 15px;
+        padding: 2px 8px;
         border-radius: 10px;
         position: relative;
         display: flex;
@@ -122,200 +327,25 @@ def top_bar(last_update):
     """,
         unsafe_allow_html=True,
     )
+def inject_colgroup_widths(html: str, widths_px: list[int]) -> str:
+    # Build <colgroup> with fixed widths
+    colgroup = "<colgroup>" + "".join([f"<col style='width:{w}px'>" for w in widths_px]) + "</colgroup>"
 
-df = load_data()
-df["DATA_PREVISTA_SAIDA"] = pd.to_datetime(df["DATA_PREVISTA_SAIDA"], errors="coerce")
-df["DATA_EFETIVA_SAIDA"] = pd.to_datetime(df["DATA_EFETIVA_SAIDA"], errors="coerce")
-df["EXISTE_PREVISAO"] = df["DATA_PREVISTA_SAIDA"].apply(
-    lambda x: "COM PREVISÃO" if pd.notnull(x) else "SEM PREVISÃO"
-)
-df["EXISTE_SAIDA"] = df["DATA_EFETIVA_SAIDA"].apply(
-    lambda x: "EXISTE SAÍDA" if pd.notnull(x) else "SEM SAÍDA"
-)
+    # Insert colgroup right after the opening <table ...> tag
+    # Find the first occurrence of "<table" and the following ">"
+    i = html.find("<table")
+    if i == -1:
+        return html
+    j = html.find(">", i)
+    if j == -1:
+        return html
 
-
-def timezone_adjust(dt):
-    if pd.notnull(dt) and dt.tzinfo is None:
-        return timezone.localize(dt)
-    return dt
-
-
-def calc_tempo_saida(row):
-    data_prevista = timezone_adjust(row["DATA_PREVISTA_SAIDA"])
-    data_efetiva = timezone_adjust(row["DATA_EFETIVA_SAIDA"])
-
-    if row["EXISTE_SAIDA"] == "EXISTE SAÍDA":
-        referencia = data_prevista if pd.notnull(data_prevista) else data_efetiva
-        if pd.notnull(referencia) and pd.notnull(data_efetiva):
-            return int((referencia - data_efetiva).total_seconds())
-    elif pd.notnull(data_prevista):
-        return int((data_prevista - now_adjusted).total_seconds())
-    return None
-
-
-df["TEMPO_ATE_SAIDA"] = df.apply(calc_tempo_saida, axis=1)
-
-
-def definir_prioridade(row):
-    if pd.isnull(row["DATA_PREVISTA_SAIDA"]):
-        return "BAIXA"
-    tempo = row["TEMPO_ATE_SAIDA"]
-    if tempo is None:
-        return "BAIXA"
-    elif tempo > 7200:
-        return "NORMAL"
-    elif 1800 < tempo <= 7200:
-        return "ATENÇÃO"
-    elif 0 < tempo <= 1800:
-        return "URGÊNCIA"
-    elif tempo < 0:
-        return "CRÍTICA"
-    return None
-
-
-df["PRIORIDADE"] = df.apply(definir_prioridade, axis=1)
-
-
-def format_tempo_h(row):
-    T = row["TEMPO_ATE_SAIDA"]
-    if pd.isnull(T) or T is None:
-        return None
-    T = int(T)
-    abs_t = abs(T)
-    horas = abs_t // 3600
-    minutos = (abs_t % 3600) // 60
-    resultado = horas * 100 + minutos
-    return -resultado if T < 0 else resultado
-
-
-df["TEMPO_ATE_SAIDA_H"] = df.apply(format_tempo_h, axis=1)
-
-
-def format_time(row):
-    T = row["TEMPO_ATE_SAIDA"]
-    if pd.isnull(T) or T is None:
-        return ""
-
-    T = int(T)
-    sinal = "-" if T < 0 else ""
-    T = abs(T)
-
-    horas = T // 3600
-    minutos = (T % 3600) // 60
-
-    if horas > 0 and minutos > 0:
-        return f"{sinal}{horas}h {minutos}min"
-    elif horas > 0:
-        return f"{sinal}{horas}h"
-    elif minutos > 0:
-        return f"{sinal}{minutos}min"
-    else:
-        return f"{sinal}0min"
-
-
-df["TEMPO_FORMATADO"] = df.apply(format_time, axis=1)
-
-
-def classificar_rumo(row):
-    origem = row["PAIS_ORIGEM_SHIPPING"]
-    destino = row["PAIS_DESTINO_SHIPPING"]
-
-    if pd.isnull(origem) or pd.isnull(destino):
-        return None
-    if origem == destino:
-        return "NAC"
-    elif destino == "Brasil":
-        return "RN"
-    else:
-        return "RS"
-
-
-df["RUMO"] = df.apply(classificar_rumo, axis=1)
-df["REFERENCIA"] = df["REFERENCIA"].str.upper()
-s = df["MOTORISTA"]
-
-df["MOTORISTA"] = (
-    s.where(s.notna())
-     .astype("string")
-     .str.strip()
-     .str.upper()
-     .str.split()
-     .str[0]
-)
-df_filtrado = df[
-    (df["EXISTE_SAIDA"] == "SEM SAÍDA")
-    & (df["SITUACAO_ID"].isin([2, 3]))
-    & (df["DATA_PREVISTA_SAIDA"].notna())
-]
-colunas_exibir = [
-    "PLACA",
-    "PLACA_2",
-    "PLACA_3",
-    "NEGOCIADOR",
-    "RUMO",
-    "DATA_EFETIVA_ENTRADA",
-    "DATA_PREVISTA_SAIDA",
-    "TEMPO_FORMATADO",
-    "PRIORIDADE",
-    "MOTORISTA",
-    "REFERENCIA",
-]
-nomes_alterados = {
-    "PLACA": "CAVALO",
-    "PLACA_2": "CARRETA",
-    "PLACA_3": "2ª CARRETA",
-    "NEGOCIADOR": "NEGOCIADOR",
-    "RUMO": "RUMO",
-    "DATA_EFETIVA_ENTRADA": "ENTRADA",
-    "DATA_PREVISTA_SAIDA": "PREVISÃO SAÍDA",
-    "TEMPO_FORMATADO": "TEMPO ATÉ SAÍDA",
-    "PRIORIDADE": "PRIORIDADE",
-    "MOTORISTA":"MOTORISTA",
-    "REFERENCIA": "REFERÊNCIA ATUAL",
-}
-def apply_priority_style(df):
-    def line_color(row):
-        cor = "white"
-        if row["PRIORIDADE"] == "CRÍTICA":
-            cor = "#ff4d4f"  # vermelho forte
-        elif row["PRIORIDADE"] == "URGÊNCIA":
-            cor = "#ffa39e"  # vermelho claro
-        elif row["PRIORIDADE"] == "ATENÇÃO":
-            cor = "#fff566"  # amarelo
-        return [f"background-color: {cor}; font-weight: bold;" for _ in row]
-
-    return df.style.apply(line_color, axis=1)
-
-
-last_update = get_last_update() 
-top_bar(last_update)
-df_exibir = df_filtrado[colunas_exibir].rename(columns=nomes_alterados)
-df_exibir["ENTRADA"] = df_exibir["ENTRADA"].dt.strftime("%d/%m/%y %H:%M")
-df_exibir["PREVISÃO SAÍDA"] = df_exibir["PREVISÃO SAÍDA"].dt.strftime("%d/%m/%y %H:%M")
-qtd_placas = df_filtrado["PLACA"].nunique()
-st.markdown("<div style='margin: 10px 0;'></div>", unsafe_allow_html=True)
-st.markdown(
-    f"""
-    <div style='
-        background-color:#f0f2f6;
-        padding:6px;
-        border-radius:10px;
-        text-align: center;
-        color: #434343;
-    '>
-        <h4>Total de Saída Previstas: {qtd_placas}</h4>
-    </div>
-""",
-    unsafe_allow_html=True,
-)
-st.markdown("<div style='margin: 5px 0;'></div>", unsafe_allow_html=True)
-df_exibir = df_exibir.fillna("")
-
+    return html[: j + 1] + colgroup + html[j + 1 :]
 
 def estilo_personalizado(df):
     def line_color(row):
         cores = {"CRÍTICA": "#FF0000", "URGÊNCIA": "#F87474", "ATENÇÃO": "#F6F93F"}
-        cor = cores.get(row["PRIORIDADE"], "white")
+        cor = cores.get(row.get("PRIORIDADE", ""), "white")
         return [f"background-color: {cor}" for _ in row]
 
     df = df.fillna("").replace("None", "")
@@ -332,7 +362,7 @@ def estilo_personalizado(df):
                 "text-align": "center",
                 "vertical-align": "middle",
                 "font-weight": "bold",
-                "color":"#434343",
+                "color": "#434343",
             },
         )
 
@@ -340,6 +370,7 @@ def estilo_personalizado(df):
         subset=[ultima_coluna],
         **{"text-align": "left", "vertical-align": "middle", "font-weight": "bold"},
     )
+
     styled = styled.set_table_styles(
         [
             {
@@ -355,11 +386,7 @@ def estilo_personalizado(df):
     styled = styled.hide(axis="index")
     return styled
 
-df_exibir["PREVISÃO SAÍDA"] = pd.to_datetime(df_exibir["PREVISÃO SAÍDA"], format="%d/%m/%y %H:%M")
-df_exibir = df_exibir.sort_values(by="PREVISÃO SAÍDA")
-df_exibir["PREVISÃO SAÍDA"] = df_exibir["PREVISÃO SAÍDA"].dt.strftime("%d/%m/%Y %H:%M")
-styled_df = estilo_personalizado(df_exibir.fillna(""))
-html = styled_df.to_html(index=False, escape=False)
+
 scroll_style = """
 <style>
 .tabela-custom {
@@ -370,21 +397,166 @@ scroll_style = """
     border: 1px solid #ccc;
     border-radius: 10px;
 }
+
+/* Let the table be as wide as needed and scroll horizontally */
 .tabela-custom table {
     border-collapse: collapse;
-    width: 100%;
+    table-layout: fixed !important;
+    width: max-content !important;
     font-family: Arial, sans-serif;
     font-size: 20px;
-}
-.tabela-custom th, .tabela-custom td {
     text-align: center;
+}
+
+.tabela-custom th, .tabela-custom td {
     padding: 4px;
     border: 1px solid #ddd;
     font-weight: bold;
     color: #434343;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-aligt: center;
 }
 </style>
 """
-st.markdown(scroll_style, unsafe_allow_html=True)
-st.markdown(f"<div class='tabela-custom'>{html}</div>", unsafe_allow_html=True)
-st_autorefresh(interval=450000, key="auto-refresh")
+
+# =========================
+# Streamlit page setup
+# =========================
+st.set_page_config(page_title="Monitoramento Pátio", layout="wide")
+
+st.markdown(
+    """
+    <style>
+        header, footer { visibility: hidden; }
+        .main > div:first-child { padding-top: 0rem; }
+
+        .block-container {
+            padding-top: 0rem;
+            padding-bottom: 0rem;
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+
+        .stApp { background-color: white; }
+        .block-container { background-color: white; }
+    </style>
+""",
+    unsafe_allow_html=True,
+)
+
+# Refresh page every 15 minutes (forces rerun)
+st_autorefresh(interval=AUTOREFRESH_INTERVAL_MS, key="auto-refresh")
+
+# Placeholders (render cached immediately, then overwrite if DB refresh completes)
+ph_top = st.empty()
+ph_kpi = st.empty()
+ph_table = st.empty()
+ph_status = st.empty()
+
+
+def render_screen(df_exibir, last_update, qtd_placas):
+    with ph_top:
+        top_bar(last_update)
+
+    with ph_kpi:
+        st.markdown("<div style='margin: 10px 0;'></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div style='
+                background-color:#f0f2f6;
+                padding:6px;
+                border-radius:10px;
+                text-align: center;
+                color: #434343;
+            '>
+                <h4>Total de Saída Previstas: {qtd_placas}</h4>
+            </div>
+        """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div style='margin: 5px 0;'></div>", unsafe_allow_html=True)
+
+    with ph_table:
+        st.markdown(scroll_style, unsafe_allow_html=True)
+        styled_df = estilo_personalizado(df_exibir)
+        html = styled_df.to_html(index=False, escape=False)
+
+        # Column widths must match the current column order in df_exibir
+        widths = [110, 110, 110, 320, 90, 150, 150, 150, 140, 170, 370]
+        html = inject_colgroup_widths(html, widths)
+
+        st.markdown(f"<div class='tabela-custom'>{html}</div>", unsafe_allow_html=True)
+
+
+# =========================
+# 1) Show persistent cache immediately (if present)
+# =========================
+cached = read_persistent_cache()
+
+if cached and cached["df"] is not None and not cached["df"].empty:
+    render_screen(cached["df"], cached["last_update"], cached["qtd_placas"])
+
+    saved_at = cached.get("saved_at")
+    if saved_at is not None and hasattr(saved_at, "to_pydatetime"):
+        saved_at_dt = saved_at.to_pydatetime()
+    else:
+        saved_at_dt = saved_at
+
+    with ph_status:
+        st.caption(
+            f"Exibindo cache persistente (JSON) salvo em: "
+            f"{saved_at_dt.strftime('%d/%m/%Y %H:%M:%S') if saved_at_dt else '-'}"
+        )
+else:
+    with ph_status:
+        st.caption("Sem cache persistente ainda. Carregando do banco...")
+
+# Decide if we should refresh from DB (based on cache age)
+should_refresh = True
+if cached and cached.get("saved_at") is not None:
+    saved_at = cached["saved_at"]
+    if hasattr(saved_at, "to_pydatetime"):
+        saved_at = saved_at.to_pydatetime()
+
+    try:
+        # If saved_at is naive, treat as Sao Paulo
+        if getattr(saved_at, "tzinfo", None) is None:
+            saved_at = timezone.localize(saved_at)
+    except Exception:
+        pass
+
+    should_refresh = (datetime.now(timezone) - saved_at) >= REFRESH_EVERY
+
+# =========================
+# 2) If stale or missing, refresh from DB and overwrite JSON
+# =========================
+if should_refresh:
+    try:
+        with ph_status:
+            st.caption("Atualizando do banco de dados e salvando cache persistente...")
+
+        df_raw = load_data()  # can be slow
+        df_exibir, qtd_placas = build_view_from_raw(df_raw)
+        last_update = get_last_update()
+
+        # Render fresh data
+        render_screen(df_exibir, last_update, qtd_placas)
+
+        # Persist to disk
+        write_persistent_cache(df_exibir, last_update, qtd_placas)
+
+        with ph_status:
+            st.caption(
+                f"Atualizado e salvo em disco em: "
+                f"{datetime.now(timezone).strftime('%d/%m/%Y %H:%M:%S')} "
+                f"({str(CACHE_FILE)})"
+            )
+
+    except Exception as e:
+        # If DB fails, keep showing whatever was already rendered from cache
+        with ph_status:
+            st.warning("Falha ao atualizar do banco. Mantendo os dados do cache persistente.")
+        # Uncomment for debugging:
+        # st.exception(e)
