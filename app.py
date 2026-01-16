@@ -4,7 +4,7 @@ import psycopg2
 import numpy as np
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 from queries import main_query, ref_query, shipping_query
 import pytz
@@ -14,6 +14,10 @@ load_dotenv()
 USER = os.getenv("USER")
 PASSWORD = os.getenv("PASSWORD")
 
+@st.cache_resource
+def get_engine():
+    url = f"postgresql+psycopg2://{USER}:{PASSWORD}@database.datalake.kmm.app.br:5430/datalake"
+    return create_engine(url, pool_pre_ping=True)
 
 @st.cache_data(ttl=300)
 def load_data():
@@ -39,7 +43,17 @@ def load_data():
 
     return df_final
 
+@st.cache_data(ttl=300)
+def get_last_update():
+    sql_last_update = """
+    SELECT MAX(cp."DATE_UPDATE") AS last_update
+    FROM manutencao.controle_patio cp;
+    """
+    engine = get_engine()
+    with engine.connect() as conn:
+        last_update = conn.execute(text(sql_last_update)).scalar()
 
+    return last_update
 
 st.set_page_config(page_title="Monitoramento Pátio", layout="wide")
 st.markdown(
@@ -70,16 +84,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+
 timezone = pytz.timezone("America/Sao_Paulo")
 now_adjusted = datetime.now(timezone)
 
+def top_bar(last_update):
+    # fallback se vier None
+    last_update_str = "-" if last_update is None else last_update.strftime("%d/%m/%Y %H:%M:%S")
 
-def top_bar():
     st.markdown(
         f"""
     <div style='
         background-color: #f0f2f6;
-        padding: 15px 30px;
+        padding: 8px 15px;
         border-radius: 10px;
         position: relative;
         display: flex;
@@ -87,7 +105,7 @@ def top_bar():
         justify-content: space-between;
     '>
         <div style='flex: 1;'>
-            <img src="https://letsara.com.br/imagens/letsara-brand.png" style="width: 180px;">
+            <img src="https://letsara.com/wp-content/uploads/2024/11/Letsara-Aplicacao-principal-horizontal.png" style="width: 180px;">
         </div>
         <div style='
             position: absolute;
@@ -98,13 +116,12 @@ def top_bar():
             <h2 style='margin: 0; color:black'>MONITORAMENTO DE SAÍDA DE PÁTIO</h2>
         </div>
         <div style='flex: 1; text-align: right; color:#434343'>
-            <strong>ÚLTIMA ATUALIZAÇÃO:</strong> {now_adjusted.strftime('%d/%m/%Y %H:%M:%S')}
+            <strong>ÚLTIMA ATUALIZAÇÃO:</strong> {last_update_str}
         </div>
     </div>
     """,
         unsafe_allow_html=True,
     )
-
 
 df = load_data()
 df["DATA_PREVISTA_SAIDA"] = pd.to_datetime(df["DATA_PREVISTA_SAIDA"], errors="coerce")
@@ -215,7 +232,16 @@ def classificar_rumo(row):
 
 df["RUMO"] = df.apply(classificar_rumo, axis=1)
 df["REFERENCIA"] = df["REFERENCIA"].str.upper()
-df["MOTORISTA"] = df["MOTORISTA"].str.upper()
+s = df["MOTORISTA"]
+
+df["MOTORISTA"] = (
+    s.where(s.notna())
+     .astype("string")
+     .str.strip()
+     .str.upper()
+     .str.split()
+     .str[0]
+)
 df_filtrado = df[
     (df["EXISTE_SAIDA"] == "SEM SAÍDA")
     & (df["SITUACAO_ID"].isin([2, 3]))
@@ -229,7 +255,6 @@ colunas_exibir = [
     "RUMO",
     "DATA_EFETIVA_ENTRADA",
     "DATA_PREVISTA_SAIDA",
-    "DATA_EFETIVA_SAIDA",
     "TEMPO_FORMATADO",
     "PRIORIDADE",
     "MOTORISTA",
@@ -243,7 +268,6 @@ nomes_alterados = {
     "RUMO": "RUMO",
     "DATA_EFETIVA_ENTRADA": "ENTRADA",
     "DATA_PREVISTA_SAIDA": "PREVISÃO SAÍDA",
-    "DATA_EFETIVA_SAIDA": "SAÍDA",
     "TEMPO_FORMATADO": "TEMPO ATÉ SAÍDA",
     "PRIORIDADE": "PRIORIDADE",
     "MOTORISTA":"MOTORISTA",
@@ -263,19 +287,18 @@ def apply_priority_style(df):
     return df.style.apply(line_color, axis=1)
 
 
-top_bar()
+last_update = get_last_update() 
+top_bar(last_update)
 df_exibir = df_filtrado[colunas_exibir].rename(columns=nomes_alterados)
-df_exibir["SAÍDA"] = df_exibir["SAÍDA"].dt.strftime("%d/%m/%Y %H:%M")
-df_exibir["SAÍDA"] = df_exibir["SAÍDA"].fillna("").replace("NaT", "")
 df_exibir["ENTRADA"] = df_exibir["ENTRADA"].dt.strftime("%d/%m/%y %H:%M")
 df_exibir["PREVISÃO SAÍDA"] = df_exibir["PREVISÃO SAÍDA"].dt.strftime("%d/%m/%y %H:%M")
 qtd_placas = df_filtrado["PLACA"].nunique()
-st.markdown("<div style='margin: 20px 0;'></div>", unsafe_allow_html=True)
+st.markdown("<div style='margin: 10px 0;'></div>", unsafe_allow_html=True)
 st.markdown(
     f"""
     <div style='
         background-color:#f0f2f6;
-        padding:10px;
+        padding:6px;
         border-radius:10px;
         text-align: center;
         color: #434343;
@@ -285,7 +308,7 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-st.markdown("<div style='margin: 10px 0;'></div>", unsafe_allow_html=True)
+st.markdown("<div style='margin: 5px 0;'></div>", unsafe_allow_html=True)
 df_exibir = df_exibir.fillna("")
 
 
@@ -351,11 +374,11 @@ scroll_style = """
     border-collapse: collapse;
     width: 100%;
     font-family: Arial, sans-serif;
-    font-size: 14px;
+    font-size: 20px;
 }
 .tabela-custom th, .tabela-custom td {
     text-align: center;
-    padding: 8px;
+    padding: 4px;
     border: 1px solid #ddd;
     font-weight: bold;
     color: #434343;
