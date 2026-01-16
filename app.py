@@ -75,7 +75,12 @@ def get_last_update():
     with engine.connect() as conn:
         return conn.execute(text(sql_last_update)).scalar()
 
-
+params = st.query_params
+force_refresh_param = params.get("force") == "1"
+if force_refresh_param:
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    should_refresh = True
 # =========================
 # Persistent Disk Cache (JSON)
 # =========================
@@ -135,7 +140,9 @@ def build_view_from_raw(df_raw: pd.DataFrame):
     # Dates
     df["DATA_PREVISTA_SAIDA"] = pd.to_datetime(df["DATA_PREVISTA_SAIDA"], errors="coerce")
     df["DATA_EFETIVA_SAIDA"] = pd.to_datetime(df["DATA_EFETIVA_SAIDA"], errors="coerce")
+    df["DATA_EFETIVA_ENTRADA"] = pd.to_datetime(df["DATA_EFETIVA_ENTRADA"], errors="coerce")
 
+    # Flags (NEEDED before any calculation that uses EXISTE_SAIDA)
     df["EXISTE_PREVISAO"] = df["DATA_PREVISTA_SAIDA"].apply(
         lambda x: "COM PREVISÃO" if pd.notnull(x) else "SEM PREVISÃO"
     )
@@ -143,10 +150,44 @@ def build_view_from_raw(df_raw: pd.DataFrame):
         lambda x: "EXISTE SAÍDA" if pd.notnull(x) else "SEM SAÍDA"
     )
 
+    # Timezone helper (NEEDED before calculations)
     def timezone_adjust(dt):
         if pd.notnull(dt) and getattr(dt, "tzinfo", None) is None:
             return timezone.localize(dt)
         return dt
+
+    # Formatter helper (used for multiple columns)
+    def format_duracao_segundos(T):
+        if T is None or (isinstance(T, float) and np.isnan(T)):
+            return ""
+        T = int(T)
+        sinal = "-" if T < 0 else ""
+        T = abs(T)
+        horas = T // 3600
+        minutos = (T % 3600) // 60
+        if horas > 0 and minutos > 0:
+            return f"{sinal}{horas}h {minutos}min"
+        elif horas > 0:
+            return f"{sinal}{horas}h"
+        elif minutos > 0:
+            return f"{sinal}{minutos}min"
+        return f"{sinal}0min"
+
+    # ===== NEW: Tempo desde entrada até agora (somente SEM SAÍDA) =====
+    def calc_tempo_desde_entrada(row):
+        if row["EXISTE_SAIDA"] != "SEM SAÍDA":
+            return None
+
+        entrada = row["DATA_EFETIVA_ENTRADA"]
+        if pd.isnull(entrada):
+            return None
+
+        entrada = timezone_adjust(entrada)
+        return int((now_adjusted - entrada).total_seconds())
+
+    df["TEMPO_DESDE_ENTRADA"] = df.apply(calc_tempo_desde_entrada, axis=1)
+    df["TEMPO_ENTRADA_ATE_AGORA"] = df["TEMPO_DESDE_ENTRADA"].apply(format_duracao_segundos)
+    # ================================================================
 
     def calc_tempo_saida(row):
         data_prevista = timezone_adjust(row["DATA_PREVISTA_SAIDA"])
@@ -246,6 +287,7 @@ def build_view_from_raw(df_raw: pd.DataFrame):
         "NEGOCIADOR",
         "RUMO",
         "DATA_EFETIVA_ENTRADA",
+        "TEMPO_ENTRADA_ATE_AGORA",
         "DATA_PREVISTA_SAIDA",
         "TEMPO_FORMATADO",
         "PRIORIDADE",
@@ -260,8 +302,9 @@ def build_view_from_raw(df_raw: pd.DataFrame):
         "NEGOCIADOR": "NEGOCIADOR",
         "RUMO": "RUMO",
         "DATA_EFETIVA_ENTRADA": "ENTRADA",
+        "TEMPO_ENTRADA_ATE_AGORA": "TEMPO PATIO",
         "DATA_PREVISTA_SAIDA": "PREVISÃO SAÍDA",
-        "TEMPO_FORMATADO": "TEMPO ATÉ SAÍDA",
+        "TEMPO_FORMATADO": "TEMPO P/ SAÍDA",
         "PRIORIDADE": "PRIORIDADE",
         "MOTORISTA": "MOTORISTA",
         "REFERENCIA": "REFERÊNCIA ATUAL",
@@ -344,7 +387,7 @@ def inject_colgroup_widths(html: str, widths_px: list[int]) -> str:
 
 def estilo_personalizado(df):
     def line_color(row):
-        cores = {"CRÍTICA": "#FF0000", "URGÊNCIA": "#F87474", "ATENÇÃO": "#F6F93F"}
+        cores = {"CRÍTICA": "#FF0000A0", "URGÊNCIA": "#F87474A9", "ATENÇÃO": "#F6F93FAC"}
         cor = cores.get(row.get("PRIORIDADE", ""), "white")
         return [f"background-color: {cor}" for _ in row]
 
@@ -404,7 +447,7 @@ scroll_style = """
     table-layout: fixed !important;
     width: max-content !important;
     font-family: Arial, sans-serif;
-    font-size: 20px;
+    font-size: 22px;
     text-align: center;
 }
 
@@ -484,7 +527,7 @@ def render_screen(df_exibir, last_update, qtd_placas):
         html = styled_df.to_html(index=False, escape=False)
 
         # Column widths must match the current column order in df_exibir
-        widths = [110, 110, 110, 320, 90, 150, 150, 150, 140, 170, 370]
+        widths = [110, 110, 110, 200, 90, 150,150, 170, 150, 140, 160, 350]
         html = inject_colgroup_widths(html, widths)
 
         st.markdown(f"<div class='tabela-custom'>{html}</div>", unsafe_allow_html=True)
@@ -555,8 +598,8 @@ if should_refresh:
             )
 
     except Exception as e:
-        # If DB fails, keep showing whatever was already rendered from cache
         with ph_status:
-            st.warning("Falha ao atualizar do banco. Mantendo os dados do cache persistente.")
+            st.error("Falha ao atualizar do banco. Veja o erro abaixo:")
+        st.exception(e) 
         # Uncomment for debugging:
         # st.exception(e)
