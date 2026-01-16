@@ -411,7 +411,7 @@ def estilo_personalizado(df):
 
     styled = styled.set_properties(
         subset=[ultima_coluna],
-        **{"text-align": "left", "vertical-align": "middle", "font-weight": "bold"},
+        **{"text-align": "left", "vertical-align": "middle", "font-weight": "bold","color": "#434343"},
     )
 
     styled = styled.set_table_styles(
@@ -424,6 +424,21 @@ def estilo_personalizado(df):
                 ],
             }
         ]
+    )
+    styled = styled.set_table_styles(
+    [
+        # Header cells (column names)
+        {
+            "selector": "thead th",
+            "props": [
+                ("color", "#434343"),
+                ("background-color", "#f0f2f6"),
+                ("text-align", "center"),
+                ("font-weight", "bold"),
+            ],
+        },
+    ],
+    overwrite=False,
     )
 
     styled = styled.hide(axis="index")
@@ -439,6 +454,14 @@ scroll_style = """
     display: block;
     border: 1px solid #ccc;
     border-radius: 10px;
+}
+.tabela-custom th {
+    color: #434343 !important;
+    background-color: #f0f2f6 !important;
+}
+
+.tabela-custom td {
+    color: #434343 !important;
 }
 
 /* Let the table be as wide as needed and scroll horizontally */
@@ -459,7 +482,15 @@ scroll_style = """
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    text-aligt: center;
+    text-align: center;
+}
+
+@media (forced-colors: active) {
+  .tabela-custom th, .tabela-custom td {
+    forced-color-adjust: none;
+    color: #434343 !important;
+    background-color: white !important;
+  }
 }
 </style>
 """
