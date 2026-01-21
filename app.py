@@ -274,22 +274,23 @@ def build_view_from_raw(df_raw: pd.DataFrame):
         )
 
     # Filter
+    LIMITE_HORAS = 4
+    LIMITE_SEGUNDOS = LIMITE_HORAS * 3600
     df_filtrado = df[
         (df["EXISTE_SAIDA"] == "SEM SAÍDA")
         & (df["SITUACAO_ID"].isin([2, 3]))
         & (df["DATA_PREVISTA_SAIDA"].notna())
+        & (df["TEMPO_ATE_SAIDA"] <= LIMITE_SEGUNDOS)
     ]
 
     colunas_exibir = [
         "PLACA",
         "PLACA_2",
-        "PLACA_3",
         "NEGOCIADOR",
         "RUMO",
         "DATA_EFETIVA_ENTRADA",
         "TEMPO_ENTRADA_ATE_AGORA",
         "DATA_PREVISTA_SAIDA",
-        "TEMPO_FORMATADO",
         "PRIORIDADE",
         "MOTORISTA",
         "REFERENCIA",
@@ -298,13 +299,11 @@ def build_view_from_raw(df_raw: pd.DataFrame):
     nomes_alterados = {
         "PLACA": "CAVALO",
         "PLACA_2": "CARRETA",
-        "PLACA_3": "2ª CARRETA",
         "NEGOCIADOR": "NEGOCIADOR",
         "RUMO": "RUMO",
         "DATA_EFETIVA_ENTRADA": "ENTRADA",
         "TEMPO_ENTRADA_ATE_AGORA": "TEMPO PATIO",
         "DATA_PREVISTA_SAIDA": "PREVISÃO SAÍDA",
-        "TEMPO_FORMATADO": "TEMPO P/ SAÍDA",
         "PRIORIDADE": "PRIORIDADE",
         "MOTORISTA": "MOTORISTA",
         "REFERENCIA": "REFERÊNCIA ATUAL",
@@ -388,7 +387,7 @@ def inject_colgroup_widths(html: str, widths_px: list[int]) -> str:
 
 def estilo_personalizado(df):
     def line_color(row):
-        cores = {"CRÍTICA": "#FF0000A0", "URGÊNCIA": "#F87474A9", "ATENÇÃO": "#F6F93FAC"}
+        cores = {"CRÍTICA": "#FF000044", "URGÊNCIA": "#F8747458", "ATENÇÃO": "#F6F93F4B"}
         cor = cores.get(row.get("PRIORIDADE", ""), "#161b2e")
         return [f"background-color: {cor}" for _ in row]
 
@@ -421,6 +420,7 @@ def estilo_personalizado(df):
                 "selector": "td",
                 "props": [
                     ("font-family", "Arial, sans-serif"),
+                    ("font-size", "21px"),
                     ("font-weight", "bold"),
                 ],
             }
@@ -465,22 +465,22 @@ scroll_style = """
     color: #434343 !important;
 }
 
-/* Let the table be as wide as needed and scroll horizontally */
 .tabela-custom table {
     border-collapse: collapse;
     table-layout: fixed !important;
     width: max-content !important;
     font-family: Arial, sans-serif;
-    font-size: 22px;
     text-align: center;
 }
 
 .tabela-custom th, .tabela-custom td {
-    padding: 4px;
+    padding: 0;
     border: 1px solid #ddd;
     font-weight: bold;
     color: #434343;
     white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
     overflow: hidden;
     text-overflow: ellipsis;
     text-align: center;
@@ -559,7 +559,7 @@ def render_screen(df_exibir, last_update, qtd_placas):
         html = styled_df.to_html(index=False, escape=False)
 
         # Column widths must match the current column order in df_exibir
-        widths = [110, 110, 110, 200, 90, 150,150, 170, 150, 140, 160, 350]
+        widths = [130, 130, 230, 100, 170,170, 180, 160, 180, 440]
         html = inject_colgroup_widths(html, widths)
 
         st.markdown(f"<div class='tabela-custom'>{html}</div>", unsafe_allow_html=True)
