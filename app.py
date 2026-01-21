@@ -344,16 +344,17 @@ def top_bar(last_update):
     st.markdown(
         f"""
     <div style='
-        background-color: #f0f2f6;
+        background-color: #161b2e;
         padding: 2px 8px;
         border-radius: 10px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: space-between;
+        height:70px;
     '>
         <div style='flex: 1;'>
-            <img src="https://letsara.com/wp-content/uploads/2024/11/Letsara-Aplicacao-principal-horizontal.png" style="width: 180px;">
+            <img src="https://letsara.com/wp-content/uploads/2024/10/Letsara-Aplicacao-branca-horizontal.png" style="width: 180px;">
         </div>
         <div style='
             position: absolute;
@@ -361,9 +362,9 @@ def top_bar(last_update):
             transform: translateX(-50%);
             text-align: center;
         '>
-            <h2 style='margin: 0; color:black'>MONITORAMENTO DE SAÍDA DE PÁTIO</h2>
+            <h2 style='margin: 0; color:white;'>MONITORAMENTO DE SAÍDA DE PÁTIO</h2>
         </div>
-        <div style='flex: 1; text-align: right; color:#434343'>
+        <div style='flex: 1; text-align: right; color:#eaeaea'>
             <strong>ÚLTIMA ATUALIZAÇÃO:</strong> {last_update_str}
         </div>
     </div>
@@ -388,7 +389,7 @@ def inject_colgroup_widths(html: str, widths_px: list[int]) -> str:
 def estilo_personalizado(df):
     def line_color(row):
         cores = {"CRÍTICA": "#FF0000A0", "URGÊNCIA": "#F87474A9", "ATENÇÃO": "#F6F93FAC"}
-        cor = cores.get(row.get("PRIORIDADE", ""), "white")
+        cor = cores.get(row.get("PRIORIDADE", ""), "#161b2e")
         return [f"background-color: {cor}" for _ in row]
 
     df = df.fillna("").replace("None", "")
@@ -404,14 +405,14 @@ def estilo_personalizado(df):
             **{
                 "text-align": "center",
                 "vertical-align": "middle",
-                "font-weight": "bold",
-                "color": "#434343",
+                "font-weight": "none",
+                "color": "#E1E1E6",
             },
         )
 
     styled = styled.set_properties(
         subset=[ultima_coluna],
-        **{"text-align": "left", "vertical-align": "middle", "font-weight": "bold","color": "#434343"},
+        **{"text-align": "left", "vertical-align": "middle", "font-weight": "bold","color": "#E1E1E6"},
     )
 
     styled = styled.set_table_styles(
@@ -431,8 +432,8 @@ def estilo_personalizado(df):
         {
             "selector": "thead th",
             "props": [
-                ("color", "#434343"),
-                ("background-color", "#f0f2f6"),
+                ("color", "#F7F7F7"),
+                ("background-color", "#0b0f1d"),
                 ("text-align", "center"),
                 ("font-weight", "bold"),
             ],
@@ -513,8 +514,8 @@ st.markdown(
             padding-right: 1rem;
         }
 
-        .stApp { background-color: white; }
-        .block-container { background-color: white; }
+        .stApp { background-color: #0b0f1d; }
+        .block-container { background-color: #0b0f1d; }
     </style>
 """,
     unsafe_allow_html=True,
@@ -539,7 +540,7 @@ def render_screen(df_exibir, last_update, qtd_placas):
         st.markdown(
             f"""
             <div style='
-                background-color:#f0f2f6;
+                background-color:#0b0f1d;
                 padding:6px;
                 border-radius:10px;
                 text-align: center;
