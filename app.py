@@ -334,7 +334,7 @@ def build_view_from_raw(df_raw: pd.DataFrame):
 
 
 
-def top_bar(last_update):
+def top_bar(last_update, render_toggle=True):
     # last_update can be None / Timestamp / datetime
     if last_update is None or (isinstance(last_update, float) and np.isnan(last_update)):
         last_update_str = "-"
@@ -366,12 +366,15 @@ def top_bar(last_update):
     with c_right:
         c_toggle, c_update = st.columns([1.1, 4.0])
         with c_toggle:
-            show_all = st.toggle(
-                "Mostrar todos",
-                key="show_all_toggle",
-                label_visibility="collapsed",
-                help="Ligado remove o limite de 4h. Desligado aplica o limite de 4h.",
-            )
+            if render_toggle:
+                show_all = st.toggle(
+                    "Mostrar todos",
+                    key="show_all_toggle",
+                    label_visibility="collapsed",
+                    help="Ligado remove o limite de 4h. Desligado aplica o limite de 4h.",
+                )
+            else:
+                show_all = st.session_state.get("show_all_toggle", False)
         with c_update:
             st.markdown(
                 f"<div style='color:#eaeaea;text-align:right;line-height:1.2;'><strong>ULTIMA ATUALIZACAO:</strong> {last_update_str}</div>",
@@ -567,9 +570,9 @@ ph_table = st.empty()
 ph_status = st.empty()
 
 
-def render_screen(df_base, last_update):
+def render_screen(df_base, last_update, render_toggle=True):
     with ph_top:
-        show_all = top_bar(last_update)
+        show_all = top_bar(last_update, render_toggle=render_toggle)
 
     df_exibir, qtd_placas = apply_visual_filter(df_base, show_all)
 
@@ -615,8 +618,10 @@ cache_is_legacy = (
     )
 )
 
+rendered_cached = False
 if cached and not cache_is_legacy and cached["df"] is not None and not cached["df"].empty:
-    render_screen(cached["df"], cached["last_update"])
+    render_screen(cached["df"], cached["last_update"], render_toggle=True)
+    rendered_cached = True
 
     saved_at = cached.get("saved_at")
     if saved_at is not None and hasattr(saved_at, "to_pydatetime"):
@@ -667,7 +672,7 @@ if should_refresh:
         last_update = get_last_update()
 
         # Render fresh data
-        render_screen(df_exibir, last_update)
+        render_screen(df_exibir, last_update, render_toggle=not rendered_cached)
 
         # Persist to disk
         qtd_placas = pd.Series(df_exibir["CAVALO"]).nunique() if "CAVALO" in df_exibir.columns else 0
