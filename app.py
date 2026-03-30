@@ -28,6 +28,9 @@ REFRESH_EVERY = timedelta(minutes=15)
 
 # Streamlit autorefresh interval (ms)
 AUTOREFRESH_INTERVAL_MS = 900000  # 15 min
+LIMITE_HORAS = 4
+LIMITE_SEGUNDOS = LIMITE_HORAS * 3600
+CACHE_FORMAT_VERSION = 2
 
 
 # =========================
@@ -101,12 +104,14 @@ def read_persistent_cache():
         saved_at = pd.to_datetime(saved_at_iso) if saved_at_iso else None
 
         qtd_placas = payload.get("qtd_placas", 0)
+        cache_version = payload.get("cache_version", 1)
 
         return {
             "df": df_cached,
             "last_update": last_update,
             "saved_at": saved_at,
             "qtd_placas": qtd_placas,
+            "cache_version": cache_version,
         }
     except Exception:
         return None
@@ -128,6 +133,7 @@ def write_persistent_cache(df_exibir, last_update, qtd_placas):
         "saved_at": now_sp.isoformat(),
         "last_update": last_update_dt.isoformat() if last_update_dt is not None else None,
         "qtd_placas": int(qtd_placas),
+        "cache_version": CACHE_FORMAT_VERSION,
         "rows": df_exibir.to_dict(orient="records"),
     }
 
@@ -144,10 +150,10 @@ def build_view_from_raw(df_raw: pd.DataFrame):
 
     # Flags (NEEDED before any calculation that uses EXISTE_SAIDA)
     df["EXISTE_PREVISAO"] = df["DATA_PREVISTA_SAIDA"].apply(
-        lambda x: "COM PREVISÃO" if pd.notnull(x) else "SEM PREVISÃO"
+        lambda x: "COM PREVISAO" if pd.notnull(x) else "SEM PREVISAO"
     )
     df["EXISTE_SAIDA"] = df["DATA_EFETIVA_SAIDA"].apply(
-        lambda x: "EXISTE SAÍDA" if pd.notnull(x) else "SEM SAÍDA"
+        lambda x: "EXISTE SAIDA" if pd.notnull(x) else "SEM SAIDA"
     )
 
     # Timezone helper (NEEDED before calculations)
@@ -173,9 +179,9 @@ def build_view_from_raw(df_raw: pd.DataFrame):
             return f"{sinal}{minutos}min"
         return f"{sinal}0min"
 
-    # ===== NEW: Tempo desde entrada até agora (somente SEM SAÍDA) =====
+    # Tempo desde entrada ate agora (somente SEM SAIDA)
     def calc_tempo_desde_entrada(row):
-        if row["EXISTE_SAIDA"] != "SEM SAÍDA":
+        if row["EXISTE_SAIDA"] != "SEM SAIDA":
             return None
 
         entrada = row["DATA_EFETIVA_ENTRADA"]
@@ -187,13 +193,12 @@ def build_view_from_raw(df_raw: pd.DataFrame):
 
     df["TEMPO_DESDE_ENTRADA"] = df.apply(calc_tempo_desde_entrada, axis=1)
     df["TEMPO_ENTRADA_ATE_AGORA"] = df["TEMPO_DESDE_ENTRADA"].apply(format_duracao_segundos)
-    # ================================================================
 
     def calc_tempo_saida(row):
         data_prevista = timezone_adjust(row["DATA_PREVISTA_SAIDA"])
         data_efetiva = timezone_adjust(row["DATA_EFETIVA_SAIDA"])
 
-        if row["EXISTE_SAIDA"] == "EXISTE SAÍDA":
+        if row["EXISTE_SAIDA"] == "EXISTE SAIDA":
             referencia = data_prevista if pd.notnull(data_prevista) else data_efetiva
             if pd.notnull(referencia) and pd.notnull(data_efetiva):
                 return int((referencia - data_efetiva).total_seconds())
@@ -212,11 +217,11 @@ def build_view_from_raw(df_raw: pd.DataFrame):
         elif tempo > 7200:
             return "NORMAL"
         elif 1800 < tempo <= 7200:
-            return "ATENÇÃO"
+            return "ATENCAO"
         elif 0 < tempo <= 1800:
-            return "URGÊNCIA"
+            return "URGENCIA"
         elif tempo < 0:
-            return "CRÍTICA"
+            return "CRITICA"
         return "BAIXA"
 
     df["PRIORIDADE"] = df.apply(definir_prioridade, axis=1)
@@ -273,15 +278,13 @@ def build_view_from_raw(df_raw: pd.DataFrame):
             .str[0]
         )
 
-    # Filter
-    LIMITE_HORAS = 4
-    LIMITE_SEGUNDOS = LIMITE_HORAS * 3600
-    df_filtrado = df[
-        (df["EXISTE_SAIDA"] == "SEM SAÍDA")
+    # Base filter (without 4-hour window)
+    filtro_base = (
+        (df["EXISTE_SAIDA"] == "SEM SAIDA")
         & (df["SITUACAO_ID"].isin([2, 3]))
         & (df["DATA_PREVISTA_SAIDA"].notna())
-        & (df["TEMPO_ATE_SAIDA"] <= LIMITE_SEGUNDOS)
-    ]
+    )
+    df_filtrado = df[filtro_base]
 
     colunas_exibir = [
         "PLACA",
@@ -303,32 +306,32 @@ def build_view_from_raw(df_raw: pd.DataFrame):
         "RUMO": "RUMO",
         "DATA_EFETIVA_ENTRADA": "ENTRADA",
         "TEMPO_ENTRADA_ATE_AGORA": "TEMPO PATIO",
-        "DATA_PREVISTA_SAIDA": "PREVISÃO SAÍDA",
+        "DATA_PREVISTA_SAIDA": "PREVISAO SAIDA",
         "PRIORIDADE": "PRIORIDADE",
         "MOTORISTA": "MOTORISTA",
-        "REFERENCIA": "REFERÊNCIA ATUAL",
+        "REFERENCIA": "REFERENCIA ATUAL",
     }
 
     df_exibir = df_filtrado[colunas_exibir].rename(columns=nomes_alterados).copy()
+    df_exibir["_TEMPO_ATE_SAIDA_SEG"] = pd.to_numeric(df_filtrado["TEMPO_ATE_SAIDA"], errors="coerce")
 
     # Format dates for display
     df_exibir["ENTRADA"] = pd.to_datetime(df_exibir["ENTRADA"], errors="coerce").dt.strftime(
         "%d/%m/%y %H:%M"
     )
-    df_exibir["PREVISÃO SAÍDA"] = pd.to_datetime(
-        df_exibir["PREVISÃO SAÍDA"], errors="coerce"
+    df_exibir["PREVISAO SAIDA"] = pd.to_datetime(
+        df_exibir["PREVISAO SAIDA"], errors="coerce"
     ).dt.strftime("%d/%m/%y %H:%M")
 
-    # Sort by PREVISÃO SAÍDA safely
-    sort_key = pd.to_datetime(df_exibir["PREVISÃO SAÍDA"], format="%d/%m/%y %H:%M", errors="coerce")
+    # Sort by PREVISAO SAIDA safely
+    sort_key = pd.to_datetime(df_exibir["PREVISAO SAIDA"], format="%d/%m/%y %H:%M", errors="coerce")
     df_exibir["_sort"] = sort_key
     df_exibir = df_exibir.sort_values("_sort").drop(columns="_sort")
 
     df_exibir = df_exibir.fillna("").replace("None", "")
 
-    qtd_placas = df_filtrado["PLACA"].nunique()
+    return df_exibir
 
-    return df_exibir, qtd_placas
 
 
 def top_bar(last_update):
@@ -341,35 +344,61 @@ def top_bar(last_update):
         last_update_str = last_update.strftime("%d/%m/%Y %H:%M:%S")
 
     st.markdown(
-        f"""
-    <div style='
-        background-color: #161b2e;
-        padding: 2px 8px;
-        border-radius: 10px;
-        position: relative;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        height:70px;
-    '>
-        <div style='flex: 1;'>
-            <img src="https://letsara.com/wp-content/uploads/2024/10/Letsara-Aplicacao-branca-horizontal.png" style="width: 180px;">
-        </div>
-        <div style='
-            position: absolute;
-            left: 50%;
-            transform: translateX(-50%);
-            text-align: center;
-        '>
-            <h2 style='margin: 0; color:white;'>MONITORAMENTO DE SAÍDA DE PÁTIO</h2>
-        </div>
-        <div style='flex: 1; text-align: right; color:#eaeaea'>
-            <strong>ÚLTIMA ATUALIZAÇÃO:</strong> {last_update_str}
-        </div>
-    </div>
-    """,
+        """
+        <style>
+            div[data-testid="stToggle"] { margin-top: 0 !important; margin-bottom: 0 !important; }
+            div[data-testid="stToggle"] label { margin-bottom: 0 !important; }
+        </style>
+        """,
         unsafe_allow_html=True,
     )
+    c_logo, c_title, c_right = st.columns([1.4, 2.6, 2.0])
+    with c_logo:
+        st.markdown(
+            "<img src='https://letsara.com/wp-content/uploads/2024/10/Letsara-Aplicacao-branca-horizontal.png' style='width:180px;'>",
+            unsafe_allow_html=True,
+        )
+    with c_title:
+        st.markdown(
+            "<h2 style='margin:4px 0 0 0;color:white;text-align:center;'>MONITORAMENTO DE SAIDA DE PATIO</h2>",
+            unsafe_allow_html=True,
+        )
+    with c_right:
+        c_toggle, c_update = st.columns([1.1, 4.0])
+        with c_toggle:
+            show_all = st.toggle(
+                "Mostrar todos",
+                key="show_all_toggle",
+                label_visibility="collapsed",
+                help="Ligado remove o limite de 4h. Desligado aplica o limite de 4h.",
+            )
+        with c_update:
+            st.markdown(
+                f"<div style='color:#eaeaea;text-align:right;line-height:1.2;'><strong>ULTIMA ATUALIZACAO:</strong> {last_update_str}</div>",
+                unsafe_allow_html=True,
+            )
+
+    return show_all
+
+
+def apply_visual_filter(df_base: pd.DataFrame, show_all: bool):
+    if df_base is None:
+        return pd.DataFrame(), 0
+
+    df = df_base.copy()
+    if not show_all:
+        if "_TEMPO_ATE_SAIDA_SEG" in df.columns:
+            tempo_seg = pd.to_numeric(df["_TEMPO_ATE_SAIDA_SEG"], errors="coerce")
+            df = df[tempo_seg <= LIMITE_SEGUNDOS]
+        elif "PREVISAO SAIDA" in df.columns:
+            previsao_saida = pd.to_datetime(df["PREVISAO SAIDA"], format="%d/%m/%y %H:%M", errors="coerce")
+            now = datetime.now(timezone).replace(tzinfo=None)
+            tempo_seg = (previsao_saida - now).dt.total_seconds()
+            df = df[tempo_seg <= LIMITE_SEGUNDOS]
+
+    qtd_placas = df["CAVALO"].nunique() if "CAVALO" in df.columns else 0
+    df = df.drop(columns=["_TEMPO_ATE_SAIDA_SEG"], errors="ignore")
+    return df, qtd_placas
 def inject_colgroup_widths(html: str, widths_px: list[int]) -> str:
     # Build <colgroup> with fixed widths
     colgroup = "<colgroup>" + "".join([f"<col style='width:{w}px'>" for w in widths_px]) + "</colgroup>"
@@ -387,7 +416,14 @@ def inject_colgroup_widths(html: str, widths_px: list[int]) -> str:
 
 def estilo_personalizado(df):
     def line_color(row):
-        cores = {"CRÍTICA": "#FF000044", "URGÊNCIA": "#F8747458", "ATENÇÃO": "#F6F93F4B"}
+        cores = {
+            "CRITICA": "#FF000044",
+            "URGENCIA": "#F8747458",
+            "ATENCAO": "#F6F93F4B",
+            "CRÍTICA": "#FF000044",
+            "URGÊNCIA": "#F8747458",
+            "ATENÇÃO": "#F6F93F4B",
+        }
         cor = cores.get(row.get("PRIORIDADE", ""), "#161b2e")
         return [f"background-color: {cor}" for _ in row]
 
@@ -499,7 +535,7 @@ scroll_style = """
 # =========================
 # Streamlit page setup
 # =========================
-st.set_page_config(page_title="Monitoramento Pátio", layout="wide")
+st.set_page_config(page_title="Monitoramento Patio", layout="wide")
 
 st.markdown(
     """
@@ -531,9 +567,11 @@ ph_table = st.empty()
 ph_status = st.empty()
 
 
-def render_screen(df_exibir, last_update, qtd_placas):
+def render_screen(df_base, last_update):
     with ph_top:
-        top_bar(last_update)
+        show_all = top_bar(last_update)
+
+    df_exibir, qtd_placas = apply_visual_filter(df_base, show_all)
 
     with ph_kpi:
         st.markdown("<div style='margin: 10px 0;'></div>", unsafe_allow_html=True)
@@ -546,7 +584,7 @@ def render_screen(df_exibir, last_update, qtd_placas):
                 text-align: center;
                 color: #434343;
             '>
-                <h4>Total de Saída Previstas: {qtd_placas}</h4>
+                <h4>Total de Saida Previstas: {qtd_placas}</h4>
             </div>
         """,
             unsafe_allow_html=True,
@@ -569,9 +607,16 @@ def render_screen(df_exibir, last_update, qtd_placas):
 # 1) Show persistent cache immediately (if present)
 # =========================
 cached = read_persistent_cache()
+cache_is_legacy = (
+    cached is not None
+    and (
+        cached.get("cache_version", 1) < CACHE_FORMAT_VERSION
+        or "_TEMPO_ATE_SAIDA_SEG" not in cached["df"].columns
+    )
+)
 
-if cached and cached["df"] is not None and not cached["df"].empty:
-    render_screen(cached["df"], cached["last_update"], cached["qtd_placas"])
+if cached and not cache_is_legacy and cached["df"] is not None and not cached["df"].empty:
+    render_screen(cached["df"], cached["last_update"])
 
     saved_at = cached.get("saved_at")
     if saved_at is not None and hasattr(saved_at, "to_pydatetime"):
@@ -586,11 +631,16 @@ if cached and cached["df"] is not None and not cached["df"].empty:
         )
 else:
     with ph_status:
-        st.caption("Sem cache persistente ainda. Carregando do banco...")
+        if cache_is_legacy:
+            st.caption("Cache antigo detectado. Atualizando do banco para carregar todas as linhas...")
+        else:
+            st.caption("Sem cache persistente ainda. Carregando do banco...")
 
 # Decide if we should refresh from DB (based on cache age)
 should_refresh = True
-if cached and cached.get("saved_at") is not None:
+if force_refresh_param or cache_is_legacy:
+    should_refresh = True
+elif cached and cached.get("saved_at") is not None:
     saved_at = cached["saved_at"]
     if hasattr(saved_at, "to_pydatetime"):
         saved_at = saved_at.to_pydatetime()
@@ -613,13 +663,14 @@ if should_refresh:
             st.caption("Atualizando do banco de dados e salvando cache persistente...")
 
         df_raw = load_data()  # can be slow
-        df_exibir, qtd_placas = build_view_from_raw(df_raw)
+        df_exibir = build_view_from_raw(df_raw)
         last_update = get_last_update()
 
         # Render fresh data
-        render_screen(df_exibir, last_update, qtd_placas)
+        render_screen(df_exibir, last_update)
 
         # Persist to disk
+        qtd_placas = pd.Series(df_exibir["CAVALO"]).nunique() if "CAVALO" in df_exibir.columns else 0
         write_persistent_cache(df_exibir, last_update, qtd_placas)
 
         with ph_status:
